@@ -1,0 +1,104 @@
+#!/usr/bin/env -S python3 -u
+import json
+import random
+import socket
+import os
+import ssl
+import sys 
+from dotenv import load_dotenv
+import argparse
+
+load_dotenv()
+
+class Wordle:
+
+    # initialize variable and connection with server
+    def __init__(self, hostname, port, encrypted, username):
+        self.id = ""
+        self.word_list = os.getenv("WORDLIST").split()
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # switches to tls encryption if specified in argument
+        if encrypted:
+            self.context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            self.sock = self.context.wrap_socket(self.sock, server_hostname=hostname)
+            self.sock.connect((hostname, port))
+        else: self.sock.connect((hostname, port))
+        hello_message = '{"type": "hello", "northeastern_username": "' + username + '"}\n'
+        self.send(hello_message)
+
+    # sends the msg to server
+    def send(self, msg):
+        self.sock.send(msg.encode())
+
+    #chooses a random word from the wordlist to be the guess
+    def make_guess(self):
+        random_word = random.choice(self.word_list)
+        msg = '{"type": "guess", "id": "' + self.id + '", "word": "' + random_word + '"}\n'
+        self.send(msg)
+    
+    # handles the received message with type start
+    def handle_start(self, json_msg):
+        self.id = json_msg["id"]
+        msg = '{"type": "guess", "id": "' + self.id + '", "word": "irate"}\n'
+        self.send(msg)
+    
+    # removes words that cannot be the answer
+    def filter_wordlist(self, guess):
+        # remove the word that was guessed
+        temp_word_list = list(filter(lambda word: word != guess["word"], self.word_list))
+        self.word_list = temp_word_list
+        # remove the word that does not have a specific char in it
+        for i in range(5):
+            if guess["marks"][i] == 2:
+                temp_word_list = list(filter(lambda word: word[i] == guess["word"][i], self.word_list))
+                self.word_list = temp_word_list
+            elif guess["marks"][i] == 1:
+                temp_word_list = list(filter(lambda word: guess["word"][i] in word, self.word_list ))
+                self.word_list = temp_word_list
+
+    # handles the received message with type retry
+    def handle_retry(self, json_msg):
+        self.filter_wordlist(json_msg["guesses"][-1])
+        self.make_guess()
+
+    # handles the received message with type bye
+    def handle_bye(self, json_msg):
+        print(json_msg['flag'])
+        sys.exit()
+
+    # takes in msg received from server to be probably delt with
+    def handle_msg(self, json_msg):
+        if (json_msg['type'] == "start"):
+            self.handle_start(json_msg)
+        if (json_msg['type'] == "retry"):
+            self.handle_retry(json_msg)
+        if (json_msg['type'] == "bye"):
+            self.handle_bye(json_msg)
+
+    # receives the message
+    def run(self):
+        while True:
+            response = b""
+            # make sure entire msg is received
+            while not response.endswith(b"\n"):
+                response += self.sock.recv(1024)
+            response = response.decode()
+            json_msg = json.loads(response.encode())
+            self.handle_msg(json_msg)
+    
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Wordle Game")
+    parser.add_argument("-p", "--port", type=int, help="Port number")
+    parser.add_argument("-s", "--ssl", action="store_true", help="Use SSL encryption")
+    parser.add_argument("hostname", type=str, help="Hostname")
+    parser.add_argument("username", type=str, help="Northeastern username")
+    args = parser.parse_args()
+
+    encrypted = args.ssl or False
+    hostname = args.hostname or "proj1.3700.network"
+    port = args.port or 27994 if encrypted else 27993
+    username = args.username or "chen.ky"
+    wordle = Wordle(hostname, port, encrypted,username)
+    wordle.run()
+    
